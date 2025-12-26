@@ -19,7 +19,6 @@ class AppDataStore(private val context: Context) {
         val RECIPIENT_C_EMAIL = stringPreferencesKey("recipient_c_email")
         val FETCH_TITLES_ENABLED = booleanPreferencesKey("fetch_titles_enabled")
 
-        // NEW
         val DEFAULT_EMAIL_PKG = stringPreferencesKey("default_email_pkg")
         val DEFAULT_EMAIL_CLS = stringPreferencesKey("default_email_cls")
     }
@@ -52,7 +51,7 @@ class AppDataStore(private val context: Context) {
         context.dataStore.edit { it[Keys.FETCH_TITLES_ENABLED] = enabled }
     }
 
-    // NEW: default email app (optional)
+    // Default email app (optional)
     suspend fun getDefaultEmailApp(): DefaultEmailApp? {
         val prefs = context.dataStore.data.first()
         val pkg = prefs[Keys.DEFAULT_EMAIL_PKG]

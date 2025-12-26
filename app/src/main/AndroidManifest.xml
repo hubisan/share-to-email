@@ -27,6 +27,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- NEW: picker for default email app -->
+        <activity
+            android:name=".EmailAppPickerActivity"
+            android:exported="false" />
+
         <!-- Real share receiver -->
         <activity
             android:name=".ShareActivity"
