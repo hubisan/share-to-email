@@ -21,6 +21,8 @@ class ShareActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+
+
         val alias = intent.component?.className.orEmpty()
         val slot = when {
             alias.endsWith("ShareAliasA") -> "A"
@@ -94,7 +96,9 @@ class ShareActivity : Activity() {
 
         val emailIntent = Intent().apply {
             action = if (attachmentUris.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND
-            type = if (attachmentUris.isEmpty()) "text/plain" else "*/*"
+            type =
+                if (attachmentUris.isEmpty()) "text/html"
+                else "*/*"  // oder "message/rfc822" ausprobieren je nach Ziel-App
 
             putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
             putExtra(Intent.EXTRA_SUBJECT, draft.subject)
