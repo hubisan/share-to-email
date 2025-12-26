@@ -221,7 +221,7 @@ private suspend fun loadDefaultEmailUi(store: AppDataStore, ctx: android.content
     return try {
         val pm = ctx.packageManager
         val ai = pm.getApplicationInfo(app.pkg, 0)
-        val label = pm.getApplicationLabel(ai)?.toString() ?: app.pkg
+        val label = pm.getApplicationLabel(ai).toString()
         val icon = pm.getApplicationIcon(app.pkg)
         DefaultEmailUi(true, label, app.pkg, icon)
     } catch (_: Exception) {
