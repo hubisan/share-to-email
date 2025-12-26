@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -15,9 +21,7 @@
         <!-- Launcher / Settings -->
         <activity
             android:name="ch.hubisan.sharetoemail.MainActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.ShareToEmail">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -26,8 +30,7 @@
         <!-- Real share receiver -->
         <activity
             android:name=".ShareActivity"
-            android:exported="true"
-            android:theme="@style/Theme.ShareToEmail" />
+            android:exported="true" />
 
         <activity-alias
             android:name=".ShareAliasA"

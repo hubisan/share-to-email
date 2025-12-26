@@ -11,11 +11,17 @@ private val Context.dataStore by preferencesDataStore(name = "share_to_email")
 
 class AppDataStore(private val context: Context) {
 
+    data class DefaultEmailApp(val pkg: String, val cls: String)
+
     private object Keys {
         val RECIPIENT_A_EMAIL = stringPreferencesKey("recipient_a_email")
         val RECIPIENT_B_EMAIL = stringPreferencesKey("recipient_b_email")
         val RECIPIENT_C_EMAIL = stringPreferencesKey("recipient_c_email")
         val FETCH_TITLES_ENABLED = booleanPreferencesKey("fetch_titles_enabled")
+
+        // NEW
+        val DEFAULT_EMAIL_PKG = stringPreferencesKey("default_email_pkg")
+        val DEFAULT_EMAIL_CLS = stringPreferencesKey("default_email_cls")
     }
 
     suspend fun getRecipientAEmail(): String =
@@ -44,5 +50,25 @@ class AppDataStore(private val context: Context) {
 
     suspend fun setFetchTitlesEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.FETCH_TITLES_ENABLED] = enabled }
+    }
+
+    // NEW: default email app (optional)
+    suspend fun getDefaultEmailApp(): DefaultEmailApp? {
+        val prefs = context.dataStore.data.first()
+        val pkg = prefs[Keys.DEFAULT_EMAIL_PKG]
+        val cls = prefs[Keys.DEFAULT_EMAIL_CLS]
+        return if (!pkg.isNullOrBlank() && !cls.isNullOrBlank()) DefaultEmailApp(pkg, cls) else null
+    }
+
+    suspend fun setDefaultEmailApp(app: DefaultEmailApp?) {
+        context.dataStore.edit { prefs ->
+            if (app == null) {
+                prefs.remove(Keys.DEFAULT_EMAIL_PKG)
+                prefs.remove(Keys.DEFAULT_EMAIL_CLS)
+            } else {
+                prefs[Keys.DEFAULT_EMAIL_PKG] = app.pkg
+                prefs[Keys.DEFAULT_EMAIL_CLS] = app.cls
+            }
+        }
     }
 }

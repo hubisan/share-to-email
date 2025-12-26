@@ -3,6 +3,7 @@ package ch.hubisan.sharetoemail
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import ch.hubisan.sharetoemail.data.AppDataStore
@@ -44,10 +45,20 @@ class ShareActivity : Activity() {
 
         val attachments: ArrayList<Uri> = when (intent.action) {
             Intent.ACTION_SEND_MULTIPLE ->
-                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM) ?: arrayListOf()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+                } ?: arrayListOf()
             Intent.ACTION_SEND -> {
-                val u = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-                arrayListOf<Uri>().apply { if (u != null) add(u) }
+                val u: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                if (u != null) arrayListOf(u) else arrayListOf()
             }
             else -> arrayListOf()
         }
@@ -56,9 +67,13 @@ class ShareActivity : Activity() {
         val subject = if (sharedText.isNotBlank()) sharedText.take(120) else "Shared content"
         val body = sharedText.ifBlank { "See attachments." }
 
+
         val emailIntent = Intent().apply {
             action = if (attachments.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND
-            type = if (attachments.isNotEmpty()) "*/*" else "text/plain"
+
+            // statt "*/*" oder "text/plain" -> mail-fokussiert
+            type = "message/rfc822"
+
             putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
             putExtra(Intent.EXTRA_SUBJECT, subject)
             putExtra(Intent.EXTRA_TEXT, body)
@@ -73,7 +88,14 @@ class ShareActivity : Activity() {
             }
         }
 
-        startActivity(Intent.createChooser(emailIntent, "Send email"))
+        if (emailIntent.resolveActivity(packageManager) == null) {
+            Toast.makeText(this, "No email app found", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        // WICHTIG: kein Chooser -> dann kann Android "Always" anbieten
+        startActivity(emailIntent)
         finish()
     }
 }
