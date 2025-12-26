@@ -3,7 +3,6 @@ package ch.hubisan.sharetoemail
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.text.TextUtils
 import android.util.TypedValue
@@ -16,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import ch.hubisan.sharetoemail.data.AppDataStore
 import kotlinx.coroutines.runBlocking
+import androidx.core.net.toUri
 
 class EmailAppPickerActivity : Activity() {
 
@@ -30,12 +30,12 @@ class EmailAppPickerActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         // Only apps that handle ACTION_SENDTO mailto:
-        val probe = Intent(Intent.ACTION_SENDTO).apply { data = Uri.parse("mailto:") }
+        val probe = Intent(Intent.ACTION_SENDTO).apply { data = "mailto:".toUri() }
         val resolved = packageManager.queryIntentActivities(probe, 0)
 
         val targets = resolved.mapNotNull { ri ->
             val ai = ri.activityInfo ?: return@mapNotNull null
-            val label = ri.loadLabel(packageManager)?.toString() ?: ai.packageName
+            val label = ri.loadLabel(packageManager).toString()
             val icon = ri.loadIcon(packageManager)
             EmailTarget(
                 pkg = ai.packageName,

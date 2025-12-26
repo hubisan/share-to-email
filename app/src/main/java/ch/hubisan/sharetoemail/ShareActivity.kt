@@ -4,11 +4,17 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import ch.hubisan.sharetoemail.data.AppDataStore
+import ch.hubisan.sharetoemail.logic.EmailComposer
+import ch.hubisan.sharetoemail.logic.ShareParser
+import ch.hubisan.sharetoemail.logic.TitleFetcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 class ShareActivity : Activity() {
 
@@ -49,7 +55,6 @@ class ShareActivity : Activity() {
             return
         }
 
-        // Validate selected app still exists
         val appInstalled = try {
             packageManager.getPackageInfo(defaultEmailApp.pkg, 0)
             true
@@ -65,58 +70,47 @@ class ShareActivity : Activity() {
             return
         }
 
-        // Minimal parse: text + attachments (EXTRA_STREAM)
-        val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
+        // ✅ Use ShareParser (fixes your warning)
+        val parsed = ShareParser.parse(this, intent)
 
-        val attachments: ArrayList<Uri> = when (intent.action) {
-            Intent.ACTION_SEND_MULTIPLE ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
-                } ?: arrayListOf()
-
-            Intent.ACTION_SEND -> {
-                val u: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
-                }
-                if (u != null) arrayListOf(u) else arrayListOf()
+        // Titles only if toggle on
+        val fetchTitlesEnabled = runBlocking { store.isFetchTitlesEnabled() }
+        val fetchedTitles: Map<String, String?> = runBlocking {
+            if (!fetchTitlesEnabled || parsed.urls.isEmpty()) {
+                emptyMap()
+            } else {
+                parsed.urls.map { url ->
+                    async {
+                        val title = withContext(Dispatchers.IO) { TitleFetcher.fetchTitle(url) }
+                        url to title
+                    }
+                }.awaitAll().toMap()
             }
-
-            else -> arrayListOf()
         }
 
-        val subject = if (sharedText.isNotBlank()) sharedText.take(120) else "Shared content"
-        val body = sharedText.ifBlank { "See attachments." }
+        val draft = EmailComposer.compose(parsed, fetchedTitles)
+
+        val attachmentUris = ArrayList(parsed.attachments.map { it.uri })
 
         val emailIntent = Intent().apply {
-            action = if (attachments.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND
-
-            // For attachments, don't rely on message/rfc822 as a "filter"
-            type = if (attachments.isEmpty()) "text/plain" else "*/*"
+            action = if (attachmentUris.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND
+            type = if (attachmentUris.isEmpty()) "text/plain" else "*/*"
 
             putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
-            putExtra(Intent.EXTRA_SUBJECT, subject)
-            putExtra(Intent.EXTRA_TEXT, body)
+            putExtra(Intent.EXTRA_SUBJECT, draft.subject)
+            putExtra(Intent.EXTRA_TEXT, draft.textBody)
+            putExtra(Intent.EXTRA_HTML_TEXT, draft.htmlBody)
 
-            if (attachments.isNotEmpty()) {
+            if (attachmentUris.isNotEmpty()) {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-                if (attachments.size > 1) {
-                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, attachments)
+                if (attachmentUris.size > 1) {
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, attachmentUris)
                 } else {
-                    putExtra(Intent.EXTRA_STREAM, attachments.first())
+                    putExtra(Intent.EXTRA_STREAM, attachmentUris.first())
                 }
-
-                // Improves URI permission propagation on some clients
-                clipData = buildClipData(attachments)
+                clipData = buildClipData(attachmentUris)
             }
 
-            // Force the chosen email app (no chooser)
             setClassName(defaultEmailApp.pkg, defaultEmailApp.cls)
         }
 
