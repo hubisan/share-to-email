@@ -23,18 +23,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Real share receiver (no intent-filter here; aliases handle it) -->
+        <!-- Real share receiver -->
         <activity
-            android:name="ch.hubisan.sharetoemail.ShareActivity"
+            android:name=".ShareActivity"
             android:exported="true"
             android:theme="@style/Theme.ShareToEmail" />
 
-
-        <!-- Share menu entries -->
         <activity-alias
             android:name=".ShareAliasA"
-            android:targetActivity="ch.hubisan.sharetoemail.ShareActivity"
+            android:targetActivity=".ShareActivity"
             android:exported="true"
             android:label="Share to @A"
             android:icon="@mipmap/ic_launcher">
@@ -48,7 +45,7 @@
 
         <activity-alias
             android:name=".ShareAliasB"
-            android:targetActivity="ch.hubisan.sharetoemail.ShareActivity"
+            android:targetActivity=".ShareActivity"
             android:exported="true"
             android:label="Share to @B"
             android:icon="@mipmap/ic_launcher">
@@ -61,10 +58,10 @@
         </activity-alias>
 
         <activity-alias
-            android:name=".ShareAliasOthers"
-            android:targetActivity="ch.hubisan.sharetoemail.ShareActivity"
+            android:name=".ShareAliasC"
+            android:targetActivity=".ShareActivity"
             android:exported="true"
-            android:label="Share to @others"
+            android:label="Share to @C"
             android:icon="@mipmap/ic_launcher">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
