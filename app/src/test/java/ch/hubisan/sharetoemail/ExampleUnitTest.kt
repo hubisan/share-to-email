@@ -1,4 +1,4 @@
-package com.example.sharetoemail
+package ch.hubisan.sharetoemail
 
 import org.junit.Test
 

@@ -1,4 +1,4 @@
-package com.example.sharetoemail.ui.theme
+package ch.hubisan.sharetoemail.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
