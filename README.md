@@ -20,8 +20,6 @@ Once installed and configured, Share to Email adds **three dedicated entries** t
 Each entry represents a **preconfigured email recipient**.  
 Selecting one of them immediately opens your chosen email app with a prepared email draft.
 
----
-
 ## Typical Usage Flow
 
 1. Open any app that supports sharing (Browser, Gallery, Files, Notes, …)
@@ -33,8 +31,6 @@ Selecting one of them immediately opens your chosen email app with a prepared em
    - attachments added (if any)
 
 No app chooser. No copy & paste.
-
----
 
 ## Initial Setup (Required)
 
@@ -49,8 +45,6 @@ After installing the APK:
 
 **Sending will not work until a default email app is selected.**
 
----
-
 ## Share Targets (A / B / C)
 
 Each share target is independent:
@@ -61,8 +55,6 @@ Each share target is independent:
   - `@A` → personal archive
   - `@B` → work email
   - `@C` → support or issue tracking
-
----
 
 ## Supported Content
 
@@ -77,8 +69,6 @@ Share to Email supports:
 
 For maximum compatibility, the email body is sent as **plain text**.
 
----
-
 ## Email App Behavior
 
 - You explicitly select **one email app** in the settings
@@ -89,8 +79,6 @@ For maximum compatibility, the email body is sent as **plain text**.
 
 This ensures predictable, fast behavior.
 
----
-
 ## Privacy
 
 - No data is uploaded anywhere
@@ -98,16 +86,12 @@ This ensures predictable, fast behavior.
 - All configuration is stored locally on the device
 - The app only reacts when you explicitly use the Android share menu
 
----
-
 ## Installation
 
 1. Download the **APK** from this website
 2. Install it on your Android device  
    (You may need to allow installation from unknown sources)
 3. Open the app and complete the initial setup
-
----
 
 ## Why This App Exists
 
