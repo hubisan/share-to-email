@@ -1,26 +1,70 @@
 package ch.hubisan.sharetoemail.logic
 
+import android.net.Uri
 import android.text.Html
 import androidx.core.net.toUri
-import java.util.Locale
 
+/**
+ * Represents the final email draft data used by the share activity.
+ *
+ * Notes:
+ * - Many mail clients (notably Gmail when opened via intent) do not reliably render HTML.
+ *   Therefore, [textBody] is the primary body format we rely on.
+ *
+ * @property subject The email subject line.
+ * @property htmlBody A minimal HTML representation (best-effort for clients that render it).
+ * @property textBody The plain text body (primary).
+ */
 data class EmailDraft(
     val subject: String,
     val htmlBody: String,
     val textBody: String
 )
 
+/**
+ * Builds an [EmailDraft] from parsed share input and optional fetched titles.
+ *
+ * Body rules (textBody is the primary output):
+ * - Always use bullet points (even for a single item).
+ * - For URLs:
+ *     • Title URL
+ *   or:
+ *     • URL
+ *   and add an empty line after each URL item (for readability).
+ * - For attachments:
+ *     • image1.png
+ *     • file1.pdf
+ *   i.e., file name + extension only (no size).
+ *
+ * HTML output is best-effort and mirrors the text content.
+ */
 object EmailComposer {
 
+    /** Maximum length for the subject, applied after prefix + content are combined. */
     private const val SUBJECT_MAX = 160
-    private const val ITEM_MAX = 40
-    private const val SEP = " | "
 
+    /** Maximum length of a single item label when building multi-item subjects. */
+    private const val ITEM_MAX = 40
+
+    /** Separator used when concatenating multiple short labels into a subject. */
+    private const val SUBJECT_SEP = " | "
+
+    /** Bullet prefix used for every item line. */
+    private const val BULLET = "— "
+
+    /**
+     * Composes an [EmailDraft] from parsed share data.
+     *
+     * Title selection priority per URL:
+     * 1) fetchedTitles[url] if present and non-blank
+     * 2) inferred title from raw share text (some apps include titles in the share payload)
+     * 3) no title (URL only)
+     *
+     * @param parsed The already parsed share content (urls, attachments, rawText).
+     * @param fetchedTitles Optional mapping URL -> fetched title (e.g. via network).
+     * @return A complete email draft.
+     */
     fun compose(parsed: ParsedShare, fetchedTitles: Map<String, String?>): EmailDraft {
-        // Der Share-Source (z.B. Firefox) liefert oft Titel/Brand im Text.
-        // Wir versuchen, Titles ohne Netz-Fetch zuzuordnen:
-        // - Single URL: erster Nicht-URL-Text
-        // - Multi URL: letzte Nicht-URL-Zeile, kommagetrennt, Reihenfolge = URL-Reihenfolge
         val inferredTitlesByUrl: Map<String, String?> =
             inferTitlesFromRawText(parsed.rawText, parsed.urls)
 
@@ -31,15 +75,29 @@ object EmailComposer {
         }
 
         val subject = buildSubject(parsed, links)
-        val (htmlBody, textBody) = buildBodies(parsed, links)
+
+        // Gmail via intents often ignores HTML; textBody is the source of truth.
+        val (textBody, htmlBody) = buildBodies(parsed, links)
 
         return EmailDraft(subject = subject, htmlBody = htmlBody, textBody = textBody)
     }
 
+    /**
+     * Internal representation of a shared URL with an optional title.
+     */
     private data class LinkItem(val url: String, val title: String?)
 
     // ---------- SUBJECT ----------
 
+    /**
+     * Builds the email subject with a small prefix to indicate the content type.
+     *
+     * Subject is limited to [SUBJECT_MAX] characters.
+     *
+     * @param parsed Parsed share data.
+     * @param links List of extracted link items.
+     * @return A subject line suitable for email clients.
+     */
     private fun buildSubject(parsed: ParsedShare, links: List<LinkItem>): String {
         val prefix = subjectPrefix(parsed)
         val remaining = (SUBJECT_MAX - (prefix.length + 1)).coerceAtLeast(0)
@@ -54,6 +112,12 @@ object EmailComposer {
         return ellipsize("$prefix $core", SUBJECT_MAX)
     }
 
+    /**
+     * Chooses a prefix that hints at the type of shared content.
+     *
+     * @param parsed Parsed share data.
+     * @return A short prefix like "[url]" or "[file]".
+     */
     private fun subjectPrefix(parsed: ParsedShare): String = when {
         parsed.urls.isNotEmpty() -> "[url]"
         parsed.attachments.isNotEmpty() && parsed.attachments.all { it.mimeType?.startsWith("image/") == true } -> "[img]"
@@ -62,26 +126,42 @@ object EmailComposer {
         else -> "[file]"
     }
 
+    /**
+     * Builds a subject for link shares.
+     *
+     * Behavior:
+     * - Single link: use title if present; otherwise full URL (not just domain).
+     * - Multiple links: use title if present; otherwise domain; keep each label short and
+     *   pack as many as fit.
+     *
+     * @param links Link items.
+     * @param remaining Available character budget (excluding prefix).
+     * @return Subject core for links.
+     */
     private fun subjectForLinks(links: List<LinkItem>, remaining: Int): String {
         fun labelSingle(li: LinkItem): String =
             (li.title ?: li.url).trim().ifBlank { li.url }
 
         return if (links.size == 1) {
-            // 1 Link: Title oder URL (nicht nur Domain)
             ellipsize(labelSingle(links.first()), remaining)
         } else {
-            // mehrere: Title falls vorhanden, sonst Domain; je max 40; bis Subject voll ist
             joinWithinLimit(
                 parts = links.map { li ->
                     val base = (li.title ?: domainOf(li.url)).trim().ifBlank { domainOf(li.url) }
                     ellipsize(base, ITEM_MAX)
                 },
-                sep = SEP,
                 maxLen = remaining
             )
         }
     }
 
+    /**
+     * Builds a subject for attachment shares.
+     *
+     * @param parsed Parsed share data.
+     * @param remaining Available character budget.
+     * @return Subject core based on attachment file names.
+     */
     private fun subjectForAttachments(parsed: ParsedShare, remaining: Int): String {
         val names = parsed.attachments.map { a ->
             a.displayName ?: a.uri.lastPathSegment ?: a.uri.toString()
@@ -92,12 +172,18 @@ object EmailComposer {
         } else {
             joinWithinLimit(
                 parts = names.map { ellipsize(it, ITEM_MAX) },
-                sep = SEP,
                 maxLen = remaining
             )
         }
     }
 
+    /**
+     * Builds a subject for pure text shares.
+     *
+     * @param parsed Parsed share data.
+     * @param remaining Available character budget.
+     * @return Subject core based on the first non-empty line of raw text.
+     */
     private fun subjectForText(parsed: ParsedShare, remaining: Int): String {
         val firstLine = parsed.rawText.lineSequence()
             .map { it.trim() }
@@ -106,69 +192,136 @@ object EmailComposer {
         return ellipsize(firstLine, remaining)
     }
 
-    // ---------- BODY (always list) ----------
+    // ---------- BODY ----------
 
+    /**
+     * Builds both bodies:
+     * - textBody: primary content for Gmail/intent flows
+     * - htmlBody: best-effort minimal HTML for clients that render it
+     *
+     * Rules:
+     * - Always bullet items (even if only one item).
+     * - URLs:
+     *     • Title URL
+     *   or:
+     *     • URL
+     *   and add an empty line after each URL entry for readability.
+     * - Attachments:
+     *     • image1.png
+     *     • file1.pdf
+     *   (file name + extension only; no file size).
+     * - If there are no URLs and no attachments: bullet each non-empty raw text line.
+     *
+     * Attachments are always appended after URLs/text when both exist.
+     *
+     * @param parsed Parsed share data.
+     * @param links Link items extracted from URLs.
+     * @return Pair(textBody, htmlBody)
+     */
     private fun buildBodies(parsed: ParsedShare, links: List<LinkItem>): Pair<String, String> {
-        val itemsPlain = mutableListOf<String>()
-        val itemsHtml = mutableListOf<String>()
+        val outLines = mutableListOf<String>()
 
-        fun addItem(plain: String, html: String) {
-            itemsPlain += plain
-            itemsHtml += "<li>$html</li>"
+        fun addBulletLine(line: String) {
+            outLines += (BULLET + line)
         }
 
-        val attachmentLines = parsed.attachments.map { a ->
-            val name = a.displayName ?: a.uri.lastPathSegment ?: a.uri.toString()
-            val size = a.sizeBytes?.let { " (${formatBytes(it)})" }.orEmpty()
-            name + size
+        fun addBlankLine() {
+            outLines += ""
         }
 
         if (links.isNotEmpty()) {
-            // WICHTIG: Wenn URLs vorhanden sind, NICHT zusätzlich rawText als Bullets ausgeben,
-            // weil Firefox/Browser sonst Titel/Brand/URL mehrfach liefern (das war dein "Durcheinander").
             links.forEach { li ->
-                val text = (li.title ?: li.url).trim().ifBlank { li.url }
+                val title = li.title?.trim().orEmpty()
+                val url = li.url.trim()
 
-                // Plain: Title [URL] oder URL
-                val plain = if (!li.title.isNullOrBlank()) "${li.title} [${li.url}]" else li.url
+                // No dash between title and URL (as requested).
+                val line = if (title.isNotBlank() && !title.equals(url, ignoreCase = true)) {
+                    "$title $url"
+                } else {
+                    url
+                }
 
-                // HTML exakt wie gewünscht:
-                // - Title vorhanden: <a href="URL">Title</a>
-                // - sonst:          <a href="URL">URL</a>
-                val html = anchor(li.url, text)
+                addBulletLine(line)
+                addBlankLine() // extra empty line after each URL
+            }
 
-                addItem(plain, html)
+            // Remove trailing blank lines
+            while (outLines.isNotEmpty() && outLines.last().isBlank()) {
+                outLines.removeAt(outLines.lastIndex)
+            }
+        } else if (parsed.attachments.isNotEmpty()) {
+            // Attachments-only share: still bullets
+            parsed.attachments.forEach { a ->
+                addBulletLine(attachmentFileNameOnly(a.displayName, a.uri))
             }
         } else {
-            // Keine URLs: Text als Bullets
-            val textLines = parsed.rawText
-                .lineSequence()
+            // Text-only share: bullet each non-empty line
+            parsed.rawText.lineSequence()
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
-                .toList()
+                .forEach { addBulletLine(it) }
+        }
 
-            textLines.forEach { line ->
-                addItem(line, Html.escapeHtml(line))
+        // Append attachments after URL list / text if we had URLs and attachments
+        if (links.isNotEmpty() && parsed.attachments.isNotEmpty()) {
+            parsed.attachments.forEach { a ->
+                addBulletLine(attachmentFileNameOnly(a.displayName, a.uri))
             }
         }
 
-        // Attachments immer hinten dran
-        attachmentLines.forEach { line ->
-            addItem(line, Html.escapeHtml(line))
+        if (outLines.isEmpty()) {
+            addBulletLine("Shared content")
         }
 
-        if (itemsPlain.isEmpty()) {
-            addItem("Shared content", "Shared content")
-        }
+        val textBody = outLines.joinToString("\n")
 
-        val textBody = itemsPlain.joinToString("\n") { "• $it" }
-        val htmlBody = "<ul style=\"margin:0;padding-left:18px;\">${itemsHtml.joinToString("")}</ul>"
+        // Best-effort HTML, using the official Android framework escaper.
+        val htmlBody = outLines.joinToString("<br/>") { Html.escapeHtml(it) }
 
-        return htmlBody to textBody
+        return textBody to htmlBody
     }
 
-    // ---------- Title inference (no fetch) ----------
+    /**
+     * Extracts a short file name (including extension) for an attachment.
+     *
+     * Preference order:
+     * 1) displayName (if present)
+     * 2) lastPathSegment
+     * 3) uri string
+     *
+     * The return value is reduced to the last path component to avoid long "content://..." lines.
+     *
+     * @param displayName Optional human-friendly name from the share source.
+     * @param uri The content/file URI.
+     * @return A string like "image1.png" or "file1.pdf".
+     */
+    private fun attachmentFileNameOnly(displayName: String?, uri: Uri): String {
+        val raw = displayName?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.takeIf { it.isNotBlank() }
+            ?: uri.toString()
 
+        return raw.substringAfterLast('/').substringAfterLast('\\')
+    }
+
+    // ---------- Title inference (no network) ----------
+
+    /**
+     * Attempts to infer titles from the raw share text for known URL lists.
+     *
+     * Rationale:
+     * Some share sources (e.g., browsers) include page titles in the share payload.
+     * We try to map titles to URLs without network calls.
+     *
+     * Heuristics:
+     * - Single URL: use the first non-URL line as title candidate.
+     * - Multiple URLs: some browsers append one comma-separated line of titles; map in order.
+     *
+     * If heuristics do not match, returns an empty map.
+     *
+     * @param rawText Raw shared text as received.
+     * @param urls The extracted URLs in the order they were found.
+     * @return Map from URL to inferred title (nullable).
+     */
     private fun inferTitlesFromRawText(rawText: String, urls: List<String>): Map<String, String?> {
         if (rawText.isBlank() || urls.isEmpty()) return emptyMap()
 
@@ -182,13 +335,11 @@ object EmailComposer {
 
         val nonUrlLines = lines.filterNot { isUrlLine(it) }
 
-        // Single URL: take first non-url line as title candidate
         if (urls.size == 1) {
             val t = nonUrlLines.firstOrNull()?.let { cleanupTitle(it) }
             return mapOf(urls.first() to t)
         }
 
-        // Multi URL: Firefox often appends a single comma-separated title list line
         val last = nonUrlLines.lastOrNull().orEmpty()
         val parts = last.split(",")
             .map { it.trim() }
@@ -201,8 +352,13 @@ object EmailComposer {
         }
     }
 
+    /**
+     * Performs minimal cleanup on an inferred title.
+     *
+     * @param s Candidate title string.
+     * @return Cleaned title.
+     */
     private fun cleanupTitle(s: String): String {
-        // minimal cleanup: collapse whitespace, strip leading bullets/quotes
         return s
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -212,12 +368,12 @@ object EmailComposer {
 
     // ---------- helpers ----------
 
-    private fun anchor(url: String, text: String): String {
-        val u = Html.escapeHtml(url)
-        val t = Html.escapeHtml(text)
-        return "<a href=\"$u\">$t</a>"
-    }
-
+    /**
+     * Extracts the domain (host) from a URL. Falls back to returning the input on errors.
+     *
+     * @param url Any URL string.
+     * @return Host without leading "www." if available; otherwise original URL.
+     */
     private fun domainOf(url: String): String {
         return try {
             val host = url.toUri().host ?: return url
@@ -227,7 +383,14 @@ object EmailComposer {
         }
     }
 
-    private fun joinWithinLimit(parts: List<String>, sep: String, maxLen: Int): String {
+    /**
+     * Concatenates parts into a single string separated by [SUBJECT_SEP] without exceeding [maxLen].
+     *
+     * @param parts The list of parts to join.
+     * @param maxLen Max total length allowed.
+     * @return Joined string within the limit.
+     */
+    private fun joinWithinLimit(parts: List<String>, maxLen: Int): String {
         if (maxLen <= 0) return ""
         val out = StringBuilder()
         for (p in parts) {
@@ -235,31 +398,26 @@ object EmailComposer {
                 if (p.length > maxLen) return ellipsize(p, maxLen)
                 out.append(p)
             } else {
-                val candidateLen = out.length + sep.length + p.length
+                val candidateLen = out.length + SUBJECT_SEP.length + p.length
                 if (candidateLen > maxLen) break
-                out.append(sep).append(p)
+                out.append(SUBJECT_SEP).append(p)
             }
         }
         if (out.isEmpty() && parts.isNotEmpty()) return ellipsize(parts.first(), maxLen)
         return out.toString()
     }
 
+    /**
+     * Truncates [s] to [max] characters, adding an ellipsis if needed.
+     *
+     * @param s Input string.
+     * @param max Maximum length.
+     * @return Possibly truncated string.
+     */
     private fun ellipsize(s: String, max: Int): String {
         val t = s.trim()
         if (t.length <= max) return t
         if (max <= 1) return "…"
         return t.take(max - 1).trimEnd() + "…"
-    }
-
-    private fun formatBytes(b: Long): String {
-        val kb = 1024.0
-        val mb = kb * 1024
-        val gb = mb * 1024
-        return when {
-            b >= gb -> String.format(Locale.US, "%.1f GB", b / gb)
-            b >= mb -> String.format(Locale.US, "%.1f MB", b / mb)
-            b >= kb -> String.format(Locale.US, "%.1f KB", b / kb)
-            else -> "$b B"
-        }
     }
 }

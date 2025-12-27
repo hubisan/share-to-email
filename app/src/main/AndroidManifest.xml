@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+      Package visibility (Android 11+):
+      We query activities that can handle ACTION_SENDTO with "mailto:" in EmailAppPickerActivity.
+    -->
     <queries>
         <intent>
             <action android:name="android.intent.action.SENDTO" />
@@ -18,7 +22,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.ShareToEmail">
 
-        <!-- Launcher / Settings -->
+        <!-- Launcher activity / settings UI -->
         <activity
             android:name="ch.hubisan.sharetoemail.MainActivity"
             android:exported="true">
@@ -28,16 +32,25 @@
             </intent-filter>
         </activity>
 
-        <!-- NEW: picker for default email app -->
+        <!-- Internal picker used from Settings to select the default email app (Gmail, etc.) -->
         <activity
             android:name=".EmailAppPickerActivity"
             android:exported="false" />
 
-        <!-- Real share receiver -->
+        <!--
+          Share receiver "trampoline" activity.
+          - Receives SEND/SEND_MULTIPLE via the activity-alias entries below.
+          - Composes an email intent and forwards to the selected email app.
+          - Should not remain in history/recents.
+        -->
         <activity
             android:name=".ShareActivity"
-            android:exported="true" />
+            android:exported="true"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask" />
 
+        <!-- Share target A -->
         <activity-alias
             android:name=".ShareAliasA"
             android:targetActivity=".ShareActivity"
@@ -52,6 +65,7 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- Share target B -->
         <activity-alias
             android:name=".ShareAliasB"
             android:targetActivity=".ShareActivity"
@@ -66,6 +80,7 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- Share target C -->
         <activity-alias
             android:name=".ShareAliasC"
             android:targetActivity=".ShareActivity"

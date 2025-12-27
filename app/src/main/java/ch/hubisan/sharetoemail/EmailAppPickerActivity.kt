@@ -1,141 +1,167 @@
 package ch.hubisan.sharetoemail
 
-import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.drawable.Drawable
 import android.os.Bundle
-import android.text.TextUtils
-import android.util.TypedValue
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.widget.ArrayAdapter
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
-import ch.hubisan.sharetoemail.data.AppDataStore
-import kotlinx.coroutines.runBlocking
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
+import ch.hubisan.sharetoemail.data.AppDataStore
+import ch.hubisan.sharetoemail.ui.theme.ShareToEmailTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-class EmailAppPickerActivity : Activity() {
+/**
+ * Picker activity that lets the user choose a default email app.
+ * Compose-based so it follows light/dark (and dynamic color).
+ */
+class EmailAppPickerActivity : ComponentActivity() {
 
     data class EmailTarget(
         val pkg: String,
         val cls: String,
         val label: String,
-        val icon: android.graphics.drawable.Drawable
+        val icon: Drawable
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Only apps that handle ACTION_SENDTO mailto:
+        setContent {
+            ShareToEmailTheme {
+                Surface {
+                    val scope = rememberCoroutineScope()
+                    val targets = remember { queryEmailTargets() }
+
+                    LaunchedEffect(Unit) {
+                        if (targets.isEmpty()) {
+                            setResult(RESULT_CANCELED)
+                            finish()
+                        }
+                    }
+
+                    if (targets.isNotEmpty()) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                setResult(RESULT_CANCELED)
+                                finish()
+                            },
+                            title = { Text("Choose default email app") },
+                            text = {
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(targets, key = { it.pkg + it.cls }) { t ->
+                                        EmailTargetRow(
+                                            target = t,
+                                            onClick = {
+                                                scope.launch {
+                                                    // Save in IO
+                                                    withContext(Dispatchers.IO) {
+                                                        AppDataStore(this@EmailAppPickerActivity)
+                                                            .setDefaultEmailApp(
+                                                                AppDataStore.DefaultEmailApp(
+                                                                    pkg = t.pkg,
+                                                                    cls = t.cls
+                                                                )
+                                                            )
+                                                    }
+
+                                                    setResult(
+                                                        RESULT_OK,
+                                                        Intent()
+                                                            .putExtra(EXTRA_PKG, t.pkg)
+                                                            .putExtra(EXTRA_CLS, t.cls)
+                                                    )
+                                                    finish()
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                // no confirm button; selection is immediate
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun queryEmailTargets(): List<EmailTarget> {
         val probe = Intent(Intent.ACTION_SENDTO).apply { data = "mailto:".toUri() }
         val resolved = packageManager.queryIntentActivities(probe, 0)
 
-        val targets = resolved.mapNotNull { ri ->
+        return resolved.mapNotNull { ri ->
             val ai = ri.activityInfo ?: return@mapNotNull null
-            val label = ri.loadLabel(packageManager).toString()
-            val icon = ri.loadIcon(packageManager)
             EmailTarget(
                 pkg = ai.packageName,
-                cls = ai.name, // fully qualified activity class name
-                label = label,
-                icon = icon
+                cls = ai.name,
+                label = ri.loadLabel(packageManager).toString(),
+                icon = ri.loadIcon(packageManager)
             )
         }.sortedBy { it.label.lowercase() }
-
-        if (targets.isEmpty()) {
-            setResult(RESULT_CANCELED)
-            finish()
-            return
-        }
-
-        val adapter = EmailTargetAdapter(this, targets)
-
-        AlertDialog.Builder(this)
-            .setTitle("Default E-Mail App wählen")
-            .setAdapter(adapter) { _, which ->
-                val t = targets[which]
-                runBlocking {
-                    AppDataStore(this@EmailAppPickerActivity).setDefaultEmailApp(
-                        AppDataStore.DefaultEmailApp(pkg = t.pkg, cls = t.cls)
-                    )
-                }
-                setResult(
-                    RESULT_OK,
-                    Intent().putExtra(EXTRA_PKG, t.pkg).putExtra(EXTRA_CLS, t.cls)
-                )
-                finish()
-            }
-            .setOnCancelListener {
-                setResult(RESULT_CANCELED)
-                finish()
-            }
-            .show()
-    }
-
-    private class EmailTargetAdapter(
-        ctx: Activity,
-        private val items: List<EmailTarget>
-    ) : ArrayAdapter<EmailTarget>(ctx, 0, items) {
-
-        private val iconSizePx = dp(ctx, 32)
-        private val rowPadH = dp(ctx, 16)
-        private val rowPadV = dp(ctx, 12)
-        private val gap = dp(ctx, 16)
-
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val item = items[position]
-
-            val row = (convertView as? LinearLayout) ?: LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(rowPadH, rowPadV, rowPadH, rowPadV)
-
-                val iv = ImageView(context).apply {
-                    id = android.R.id.icon
-                    layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx)
-                    scaleType = ImageView.ScaleType.FIT_CENTER
-                }
-                addView(iv)
-
-                val tv = TextView(context).apply {
-                    id = android.R.id.text1
-                    layoutParams = LinearLayout.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f
-                    ).apply { marginStart = gap }
-
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                    isSingleLine = true
-                    ellipsize = TextUtils.TruncateAt.END
-                }
-                addView(tv)
-            }
-
-            val iv = row.findViewById<ImageView>(android.R.id.icon)
-            val tv = row.findViewById<TextView>(android.R.id.text1)
-
-            iv.setImageDrawable(item.icon)
-            tv.text = item.label
-
-            return row
-        }
-
-        companion object {
-            private fun dp(ctx: Activity, dp: Int): Int =
-                TypedValue.applyDimension(
-                    TypedValue.COMPLEX_UNIT_DIP,
-                    dp.toFloat(),
-                    ctx.resources.displayMetrics
-                ).toInt()
-        }
     }
 
     companion object {
         const val EXTRA_PKG = "extra_pkg"
         const val EXTRA_CLS = "extra_cls"
+    }
+}
+
+@Composable
+private fun EmailTargetRow(
+    target: EmailAppPickerActivity.EmailTarget,
+    onClick: () -> Unit
+) {
+    val bmp = remember(target.pkg, target.cls, target.icon) {
+        target.icon.toBitmap(width = 96, height = 96).asImageBitmap()
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Image(
+            bitmap = bmp,
+            contentDescription = null,
+            modifier = Modifier.size(32.dp)
+        )
+
+        Text(
+            text = target.label,
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
