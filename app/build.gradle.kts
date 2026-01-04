@@ -1,6 +1,4 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import com.android.build.api.artifact.SingleArtifact
-import org.gradle.api.tasks.Copy
 
 plugins {
     alias(libs.plugins.android.application)
@@ -30,6 +28,15 @@ android {
                 "proguard-rules.pro"
             )
         }
+        applicationVariants.all {
+            val variant = this
+            variant.outputs
+                .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }
+                .forEach { output ->
+                    val outputFileName = "Share-to-Email-${variant.buildType.name}-${variant.versionName}.apk"
+                    output.outputFileName = outputFileName
+                }
+        }
     }
 
     compileOptions {
@@ -39,33 +46,6 @@ android {
 
     buildFeatures {
         compose = true
-    }
-}
-
-androidComponents {
-    onVariants(selector().withBuildType("release")) { variant ->
-
-        val versionName = variant.outputs.first().versionName.orNull ?: "unknown"
-        val capName = variant.name.replaceFirstChar { it.uppercase() }
-
-        val apkFolder = variant.artifacts.get(SingleArtifact.APK)
-
-        val copyTask = tasks.register<Copy>("copy${capName}ApkWithName") {
-            from(apkFolder)
-            include("*.apk")
-            into(layout.buildDirectory.dir("outputs/renamed-apk/${variant.name}"))
-            rename { "share-to-email-$versionName.apk" }
-        }
-
-        // <- wichtig: NICHT named(...)
-        tasks.matching { it.name == "assemble$capName" }.configureEach {
-            finalizedBy(copyTask)
-        }
-
-        // optionaler Fallback, falls Studio anders baut:
-        tasks.matching { it.name == "package$capName" }.configureEach {
-            finalizedBy(copyTask)
-        }
     }
 }
 
