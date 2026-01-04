@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import com.android.build.api.artifact.SingleArtifact
+import org.gradle.api.tasks.Copy
 
 plugins {
     alias(libs.plugins.android.application)
@@ -15,7 +17,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -37,6 +39,33 @@ android {
 
     buildFeatures {
         compose = true
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+
+        val versionName = variant.outputs.first().versionName.orNull ?: "unknown"
+        val capName = variant.name.replaceFirstChar { it.uppercase() }
+
+        val apkFolder = variant.artifacts.get(SingleArtifact.APK)
+
+        val copyTask = tasks.register<Copy>("copy${capName}ApkWithName") {
+            from(apkFolder)
+            include("*.apk")
+            into(layout.buildDirectory.dir("outputs/renamed-apk/${variant.name}"))
+            rename { "share-to-email-$versionName.apk" }
+        }
+
+        // <- wichtig: NICHT named(...)
+        tasks.matching { it.name == "assemble$capName" }.configureEach {
+            finalizedBy(copyTask)
+        }
+
+        // optionaler Fallback, falls Studio anders baut:
+        tasks.matching { it.name == "package$capName" }.configureEach {
+            finalizedBy(copyTask)
+        }
     }
 }
 
