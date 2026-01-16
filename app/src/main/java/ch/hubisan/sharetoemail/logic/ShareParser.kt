@@ -7,14 +7,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.core.content.IntentCompat
 
-/**
- * Represents a shared attachment (file/image/etc.).
- *
- * @property uri Content URI for the attachment.
- * @property mimeType MIME type as reported by the content resolver (may be null).
- * @property displayName Best-effort filename (may be null).
- * @property sizeBytes Best-effort size in bytes (may be null).
- */
 data class Attachment(
     val uri: Uri,
     val mimeType: String?,
@@ -22,119 +14,224 @@ data class Attachment(
     val sizeBytes: Long?
 )
 
-/**
- * Normalized result of parsing an Android share [Intent].
- *
- * @property rawText Combined plain text extracted from the intent (subject/text/clip text).
- * @property urls URLs extracted from [rawText].
- * @property attachments Attachments extracted from EXTRA_STREAM and ClipData URIs.
- */
+enum class ShareKind {
+    TEXT_PLAIN,
+    TEXT_URL,
+    TEXT_UNDEFINED,
+    ATTACHMENT
+}
+
 data class ParsedShare(
+    val kind: ShareKind,
     val rawText: String,
     val urls: List<String>,
+    // NEU: Hier speichern wir die vorab extrahierten Titel (URL -> Titel)
+    val prefilledTitles: Map<String, String> = emptyMap(),
     val attachments: List<Attachment>
 )
 
-/**
- * Parses common Android share intents into [ParsedShare].
- *
- * Sources considered:
- * - Intent.EXTRA_SUBJECT, Intent.EXTRA_TEXT
- * - Intent.EXTRA_STREAM (single and multiple)
- * - ClipData (text and URIs)
- *
- * Behavior:
- * - Deduplicates URIs and URLs.
- * - Filters out video attachments (MIME type "video/" with any subtype).
- */
 object ShareParser {
 
-    /**
-     * Parses a share [intent] into normalized [ParsedShare].
-     *
-     * @param context Used to access the [ContentResolver].
-     * @param intent Incoming share intent.
-     * @return Parsed share content.
-     */
+    private const val JOIN_SEPARATOR = "\n\n"
+    private const val URL_LIST_PREFIX_MAX_LEN = 5
+
     fun parse(context: Context, intent: Intent): ParsedShare {
         val cr = context.contentResolver
+        val type = intent.type?.lowercase()
 
-        val textParts = mutableListOf<String>()
-        val streamUris = mutableListOf<Uri>()
+        val extraText = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
+        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT).orEmpty()
 
-        // 1) Text extras
-        intent.getStringExtra(Intent.EXTRA_SUBJECT)
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let(textParts::add)
+        val combinedText = joinNonEmpty(extraText, subject)
 
-        intent.getStringExtra(Intent.EXTRA_TEXT)
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let(textParts::add)
+        // ---- TEXT/PLAIN BRANCH ----
+        if (type == "text/plain") {
 
-        // 2) Attachments via EXTRA_STREAM (single/multiple) using non-deprecated helpers
-        IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
-            ?.let(streamUris::add)
-
-        IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
-            ?.let(streamUris::addAll)
-
-        // 3) ClipData (may contain both text and URIs)
-        intent.clipData?.let { cd ->
-            for (i in 0 until cd.itemCount) {
-                val item = cd.getItemAt(i)
-
-                item.text
-                    ?.toString()
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(textParts::add)
-
-                item.uri?.let(streamUris::add)
+            // both empty: treat as attachment if any exist (fallback)
+            if (extraText.isBlank() && subject.isBlank()) {
+                val attachments = collectAttachmentsWithClipData(intent, cr)
+                return if (attachments.isNotEmpty()) {
+                    ParsedShare(
+                        kind = ShareKind.ATTACHMENT,
+                        rawText = "",
+                        urls = emptyList(),
+                        attachments = attachments
+                    )
+                } else {
+                    ParsedShare(
+                        kind = ShareKind.TEXT_UNDEFINED,
+                        rawText = "",
+                        urls = emptyList(),
+                        attachments = emptyList()
+                    )
+                }
             }
+
+            // only EXTRA_TEXT, no SUBJECT -> TEXT_PLAIN
+            if (extraText.isNotEmpty() && subject.isBlank()) {
+                return ParsedShare(
+                    kind = ShareKind.TEXT_PLAIN,
+                    rawText = extraText,
+                    urls = emptyList(),
+                    attachments = emptyList()
+                )
+            }
+
+            val extraTrim = extraText.trim()
+
+            // single URL only -> TEXT_URL
+            // Falls es nur 1 URL ist, ist das Subject oft der Titel. Das nehmen wir direkt mit.
+            if (isSingleUrlOnly(extraTrim)) {
+                val titleMap = if (subject.isNotBlank()) mapOf(extraTrim to subject) else emptyMap()
+                return ParsedShare(
+                    kind = ShareKind.TEXT_URL,
+                    rawText = combinedText,
+                    urls = listOf(extraTrim),
+                    prefilledTitles = titleMap,
+                    attachments = emptyList()
+                )
+            }
+
+            // URL list -> TEXT_URL
+            val urlList = extractUrlListFromLines(extraText)
+            if (urlList.isNotEmpty()) {
+                // Hier kommt deine Optimierung:
+                val titles = tryExtractTitlesFromSubject(urlList, subject)
+
+                return ParsedShare(
+                    kind = ShareKind.TEXT_URL,
+                    rawText = combinedText,
+                    urls = urlList,
+                    prefilledTitles = titles,
+                    attachments = emptyList()
+                )
+            }
+
+            // else -> TEXT_UNDEFINED
+            return ParsedShare(
+                kind = ShareKind.TEXT_UNDEFINED,
+                rawText = combinedText,
+                urls = emptyList(),
+                attachments = emptyList()
+            )
         }
 
-        val rawText = textParts.joinToString("\n\n").trim()
-        val urls = extractUrls(rawText)
-
-        val attachments = streamUris
-            .distinct()
-            .mapNotNull { uri -> uri.toAttachmentOrNull(cr) }
+        // ---- NON-TEXT/PLAIN BRANCH ----
+        val attachments = collectAttachmentsWithClipData(intent, cr)
 
         return ParsedShare(
-            rawText = rawText,
-            urls = urls,
+            kind = if (attachments.isNotEmpty()) ShareKind.ATTACHMENT else ShareKind.TEXT_UNDEFINED,
+            rawText = combinedText,
+            urls = emptyList(),
             attachments = attachments
         )
     }
 
     /**
-     * Extracts URLs from text using a conservative regex.
-     *
-     * @param text Input text.
-     * @return Distinct list of URLs in first-seen order.
+     * Versucht, die Titel aus dem Subject zu parsen, basierend auf der Heuristik:
+     * Wenn (Anzahl Kommas) == (Anzahl URLs - 1), dann entspricht die Reihenfolge der Titel der der URLs.
      */
-    private fun extractUrls(text: String): List<String> {
-        if (text.isBlank()) return emptyList()
+    private fun tryExtractTitlesFromSubject(urls: List<String>, subject: String): Map<String, String> {
+        if (urls.size < 2 || subject.isBlank()) return emptyMap()
 
-        val regex = Regex("""https?://[^\s<>()"]+""", RegexOption.IGNORE_CASE)
-        return regex.findAll(text)
-            .map { it.value.trim().trimEnd('.', ',', ')', ']', '}', ';') }
-            .distinct()
-            .toList()
+        val commaCount = subject.count { it == ',' }
+        // Exakter Match der Struktur erforderlich
+        if (commaCount == urls.size - 1) {
+            val rawTitles = subject.split(",")
+            if (rawTitles.size == urls.size) {
+                // Wir zippen die URLs mit den getrimmten Titeln zusammen
+                return urls.zip(rawTitles.map { it.trim() }).toMap()
+            }
+        }
+        return emptyMap()
     }
 
-    /**
-     * Converts a URI into an [Attachment] or returns null if it should be skipped.
-     *
-     * Currently skipped:
-     * - Video attachments (MIME type starts with "video/").
-     *
-     * @receiver The attachment URI.
-     * @param cr Content resolver used to query metadata.
-     * @return Attachment or null if filtered out.
-     */
+    private fun collectAttachmentsWithClipData(intent: Intent, cr: ContentResolver): List<Attachment> {
+        val uris = mutableListOf<Uri>()
+
+        // EXTRA_STREAM (single/multiple)
+        IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            ?.let(uris::add)
+
+        IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            ?.let(uris::addAll)
+
+        // ClipData URIs
+        intent.clipData?.let { cd ->
+            for (i in 0 until cd.itemCount) {
+                cd.getItemAt(i).uri?.let(uris::add)
+            }
+        }
+
+        return uris
+            .distinctBy { it.toString() }
+            .mapNotNull { it.toAttachmentOrNull(cr) }
+    }
+
+    private fun joinNonEmpty(a: String, b: String): String {
+        val parts = ArrayList<String>(2)
+        if (a.isNotEmpty()) parts.add(a)
+        if (b.isNotEmpty()) parts.add(b)
+        return parts.joinToString(JOIN_SEPARATOR)
+    }
+
+    private fun isSingleUrlOnly(textTrimmed: String): Boolean {
+        if (textTrimmed.isEmpty()) return false
+        return URL_REGEX.matchEntire(textTrimmed) != null
+    }
+
+    private fun extractUrlListFromLines(extraText: String): List<String> {
+        if (extraText.isBlank()) return emptyList()
+
+        val urls = mutableListOf<String>()
+        var sawNonEmpty = false
+
+        for (rawLine in extraText.split('\n')) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            sawNonEmpty = true
+
+            val stripped = stripShortPrefix(line).trim()
+            val url = extractExactlyOneUrl(stripped) ?: return emptyList()
+            urls.add(url)
+        }
+
+        return if (!sawNonEmpty) emptyList() else urls.distinct()
+    }
+
+    private fun stripShortPrefix(s: String): String {
+        val limit = minOf(URL_LIST_PREFIX_MAX_LEN, s.length)
+        val head = s.substring(0, limit)
+        val wsIdx = head.indexOfFirst { it == ' ' || it == '\t' }
+        return if (wsIdx >= 0) s.substring(wsIdx + 1) else s
+    }
+
+    private fun extractExactlyOneUrl(s: String): String? {
+        val trimmed = s.trim()
+        if (trimmed.isEmpty()) return null
+
+        val matches = URL_REGEX.findAll(trimmed).map { it.value }.toList()
+        if (matches.size != 1) return null
+
+        val token = matches[0]
+        val cleaned = trimTrailingPunctuation(token)
+
+        val remainder = trimmed.replace(token, "").trim()
+        if (remainder.isNotEmpty()) return null
+
+        return if (URL_REGEX.matches(cleaned)) cleaned else null
+    }
+
+    private fun trimTrailingPunctuation(url: String): String {
+        var u = url
+        while (u.isNotEmpty() && u.last() in TRAILING_PUNCTUATION) {
+            u = u.dropLast(1)
+        }
+        return u
+    }
+
+    private val TRAILING_PUNCTUATION = setOf('.', ',', ')', ']', '}', ';', ':', '!', '?')
+
     private fun Uri.toAttachmentOrNull(cr: ContentResolver): Attachment? {
         val mime = runCatching { cr.getType(this) }.getOrNull()
         if (mime?.startsWith("video/") == true) return null
@@ -147,13 +244,6 @@ object ShareParser {
         )
     }
 
-    /**
-     * Queries a single string column from the content resolver.
-     *
-     * @param uri Content URI to query.
-     * @param column Column name to read.
-     * @return The column value or null.
-     */
     private fun ContentResolver.queryString(uri: Uri, column: String): String? {
         return runCatching {
             query(uri, arrayOf(column), null, null, null)?.use { c ->
@@ -163,13 +253,6 @@ object ShareParser {
         }.getOrNull()
     }
 
-    /**
-     * Queries a single long column from the content resolver.
-     *
-     * @param uri Content URI to query.
-     * @param column Column name to read.
-     * @return The column value or null.
-     */
     private fun ContentResolver.queryLong(uri: Uri, column: String): Long? {
         return runCatching {
             query(uri, arrayOf(column), null, null, null)?.use { c ->
@@ -178,4 +261,6 @@ object ShareParser {
             }
         }.getOrNull()
     }
+
+    private val URL_REGEX = Regex("""https?://[^\s<>()"]+""", RegexOption.IGNORE_CASE)
 }
